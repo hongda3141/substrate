@@ -25,7 +25,7 @@ mod sandbox;
 use self::{
 	code::{
 		body::{self, DynInstr::*},
-		DataSegment, ImportedFunction, ImportedMemory, ModuleDefinition, WasmModule,
+		DataSegment, ImportedFunction, ImportedMemory, Location, ModuleDefinition, WasmModule,
 	},
 	sandbox::Sandbox,
 };
@@ -229,9 +229,9 @@ benchmarks! {
 	// This benchmarks the additional weight that is charged when a contract is executed the
 	// first time after a new schedule was deployed: For every new schedule a contract needs
 	// to re-run the instrumentation once.
-	instrument {
+	reinstrument {
 		let c in 0 .. T::Schedule::get().limits.code_len / 1024;
-		let WasmModule { code, hash, .. } = WasmModule::<T>::sized(c * 1024);
+		let WasmModule { code, hash, .. } = WasmModule::<T>::sized(c * 1024, Location::Call);
 		Contracts::<T>::store_code_raw(code, whitelisted_caller())?;
 		let schedule = T::Schedule::get();
 		let mut gas_meter = GasMeter::new(Weight::MAX);
@@ -240,21 +240,13 @@ benchmarks! {
 		Contracts::<T>::reinstrument_module(&mut module, &schedule)?;
 	}
 
-	// The weight of loading and decoding of a contract's code per kilobyte.
-	code_load {
-		let c in 0 .. T::Schedule::get().limits.code_len / 1024;
-		let WasmModule { code, hash, .. } = WasmModule::<T>::dummy_with_bytes(c * 1024);
-		Contracts::<T>::store_code_raw(code, whitelisted_caller())?;
-		let schedule = T::Schedule::get();
-		let mut gas_meter = GasMeter::new(Weight::MAX);
-	}: {
-		<PrefabWasmModule<T>>::from_storage(hash, &schedule, &mut gas_meter)?;
-	}
-
 	// This constructs a contract that is maximal expensive to instrument.
 	// It creates a maximum number of metering blocks per byte.
 	// The size of the salt influences the runtime because is is hashed in order to
-	// determine the contract address.
+	// determine the contract address. All code is generated to the `call` function so that
+	// we don't benchmark the actual execution of this code but merely what it takes to load
+	// a code of that size into the sandbox.
+	//
 	// `c`: Size of the code in kilobytes.
 	// `s`: Size of the salt in kilobytes.
 	//
@@ -269,7 +261,7 @@ benchmarks! {
 		let value = T::Currency::minimum_balance();
 		let caller = whitelisted_caller();
 		T::Currency::make_free_balance_be(&caller, caller_funding::<T>());
-		let WasmModule { code, hash, .. } = WasmModule::<T>::sized(c * 1024);
+		let WasmModule { code, hash, .. } = WasmModule::<T>::sized(c * 1024, Location::Call);
 		let origin = RawOrigin::Signed(caller.clone());
 		let addr = Contracts::<T>::contract_address(&caller, &hash, &salt);
 	}: _(origin, value, Weight::MAX, None, code, vec![], salt)
@@ -312,15 +304,18 @@ benchmarks! {
 		Contract::<T>::address_info(&addr)?;
 	}
 
-	// We just call a dummy contract to measure the overhead of the call extrinsic.
+	// We benchmark the call of a contract of size `c` kilobytes. The code is generated to the
+	// deploy function so that we don't benchmark the actual execution of instructions. When calling
+	// a contract we don't know the size of it. Therefore we initially bill the call with `call(0)`
+	// and charge the surcharge from the gas meter right before loading it from storage.
 	// The size of the data has no influence on the costs of this extrinsic as long as the contract
-	// won't call `seal_input` in its constructor to copy the data to contract memory.
-	// The dummy contract used here does not do this. The costs for the data copy is billed as
-	// part of `seal_input`.
+	// won't call `seal_input` to copy the data to contract memory. The dummy contract used here
+	// does not do this. The costs for the data copy is billed as part of `seal_input`.
 	call {
+		let c in 0 .. T::Schedule::get().limits.code_len / 1024;
 		let data = vec![42u8; 1024];
 		let instance = Contract::<T>::with_caller(
-			whitelisted_caller(), WasmModule::dummy(), vec![],
+			whitelisted_caller(), WasmModule::sized(c * 1024, Location::Deploy), vec![],
 		)?;
 		let value = T::Currency::minimum_balance();
 		let origin = RawOrigin::Signed(instance.caller.clone());
@@ -353,7 +348,7 @@ benchmarks! {
 		let c in 0 .. Perbill::from_percent(50).mul_ceil(T::Schedule::get().limits.code_len / 1024);
 		let caller = whitelisted_caller();
 		T::Currency::make_free_balance_be(&caller, caller_funding::<T>());
-		let WasmModule { code, hash, .. } = WasmModule::<T>::sized(c * 1024);
+		let WasmModule { code, hash, .. } = WasmModule::<T>::sized(c * 1024, Location::Call);
 		let origin = RawOrigin::Signed(caller.clone());
 	}: _(origin, code, None)
 	verify {

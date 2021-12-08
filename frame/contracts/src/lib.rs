@@ -278,7 +278,7 @@ pub mod pallet {
 		/// * If the account is a regular account, any value will be transferred.
 		/// * If no account exists and the call value is not less than `existential_deposit`,
 		/// a regular account will be created and any value will be transferred.
-		#[pallet::weight(T::WeightInfo::call().saturating_add(*gas_limit))]
+		#[pallet::weight(T::WeightInfo::call(0).saturating_add(*gas_limit))]
 		pub fn call(
 			origin: OriginFor<T>,
 			dest: <T::Lookup as StaticLookup>::Source,
@@ -298,7 +298,7 @@ pub mod pallet {
 				data,
 				None,
 			);
-			output.gas_meter.into_dispatch_result(output.result, T::WeightInfo::call())
+			output.gas_meter.into_dispatch_result(output.result, T::WeightInfo::call(0))
 		}
 
 		/// Instantiates a new contract from the supplied `code` optionally transferring
